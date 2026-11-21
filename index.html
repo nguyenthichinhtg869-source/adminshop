@@ -363,6 +363,57 @@
             localStorage.setItem(STORAGE_KEYS.topups, JSON.stringify(arr));
         }
 
+        function mergeUsersFromCloudRows(rows) {
+            if (!Array.isArray(rows) || rows.length === 0) return false;
+            const users = getUsers();
+            let changed = false;
+
+            for (const row of [...rows].reverse()) {
+                const payload = row && typeof row.payload === 'object' && row.payload !== null ? row.payload : {};
+                const candidate =
+                    payload.user ||
+                    payload.account ||
+                    (row.event_type && /USER|ACCOUNT|REGISTER/i.test(String(row.event_type)) ? payload : null);
+
+                if (!candidate || typeof candidate !== 'object') continue;
+                const uname = String(candidate.username || candidate.user || candidate.name || '').trim();
+                if (!uname) continue;
+
+                const idx = users.findIndex(u => String(u.username || '').trim().toLowerCase() === uname.toLowerCase());
+                const incomingBal = Number(candidate.balance);
+
+                if (idx === -1) {
+                    users.unshift({
+                        ...candidate,
+                        username: uname,
+                        balance: Number.isFinite(incomingBal) && incomingBal >= 0 ? incomingBal : 0,
+                        ip_address: candidate.ip_address || row.ip_address || 'unknown'
+                    });
+                    changed = true;
+                } else {
+                    const currentBal = Math.max(0, Number(users[idx].balance) || 0);
+                    const nextBal = Number.isFinite(incomingBal) && incomingBal >= 0 && currentBal === 0
+                        ? incomingBal
+                        : currentBal;
+                    const merged = {
+                        ...users[idx],
+                        ...candidate,
+                        username: users[idx].username || uname,
+                        balance: nextBal
+                    };
+                    if (JSON.stringify(merged) !== JSON.stringify(users[idx])) {
+                        users[idx] = merged;
+                        changed = true;
+                    }
+                }
+            }
+
+            if (changed) {
+                saveUsers(users);
+            }
+            return changed;
+        }
+
         /* ================= PHÁT TÍN HIỆU ĐỒNG BỘ SANG SHOP & SUPABASE ================= */
         async function pushAdminEventToCloud(eventType, payload = {}) {
             try {
@@ -527,11 +578,11 @@
 
         /* ================= CỘNG / TRỪ SỐ DƯ TRỰC TIẾP CHO TÀI KHOẢN ================= */
         window.adjustUserBalance = function (encodedUsername, mode) {
-            const targetName = decodeURIComponent(String(encodedUsername || '')).trim();
+            const targetName = decodeURIComponent(String(encodedUsername || '')).trim().toLowerCase();
             const users = getUsers();
-            const idx = users.findIndex(u => String(u.username || '').trim().toLowerCase() === targetName.toLowerCase());
+            const idx = users.findIndex(u => String(u.username || '').trim().toLowerCase() === targetName);
             if (idx === -1) {
-                showToast('Không tìm thấy tài khoản khách hàng!', 'error');
+                showToast('Không tìm thấy tài khoản trong danh sách QTV!', 'error');
                 return;
             }
 
@@ -819,6 +870,7 @@
                 }
 
                 cloudSyncRows = Array.isArray(data) ? data : [];
+                mergeUsersFromCloudRows(cloudSyncRows);
                 if (dot) dot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400';
                 if (label) label.textContent = `Supabase Online • ${cloudSyncRows.length} bản ghi IP`;
                 refreshAllViews();
@@ -865,6 +917,7 @@
                         if (payload && payload.new) {
                             cloudSyncRows.unshift(payload.new);
                             if (cloudSyncRows.length > 60) cloudSyncRows.length = 60;
+                            mergeUsersFromCloudRows([payload.new]);
                             refreshAllViews();
                             showToast(`Nhận sự kiện mới từ IP ${payload.new.ip_address || 'unknown'}: ${payload.new.event_type}`, 'success');
                         }
