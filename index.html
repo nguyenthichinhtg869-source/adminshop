@@ -103,7 +103,7 @@
                     <span class="hidden sm:inline">Đồng bộ QTV</span>
                 </button>
 
-                <a href="https://nguyenthichinhtg869-source.github.io/hoangnamshopvip/" target="_blank" rel="noopener noreferrer"
+                <a href="https://nguyenthichinhtg869-source.github.io/hoangnamstorevip/" target="_blank" rel="noopener noreferrer"
                     class="h-8 sm:h-9 px-2.5 sm:px-3 rounded-xl bg-gaming-card hover:bg-gaming-cardHover border border-gaming-border text-slate-200 font-bold text-[11px] sm:text-xs flex items-center gap-1.5 active:scale-95 transition-transform">
                     <i class="fa-solid fa-store text-emerald-400"></i>
                     <span class="hidden sm:inline">Mở Shop</span>
@@ -526,30 +526,40 @@
         };
 
         /* ================= CỘNG / TRỪ SỐ DƯ TRỰC TIẾP CHO TÀI KHOẢN ================= */
-        window.adjustUserBalance = function (username, mode) {
-            const inputEl = document.getElementById(`balInput_${username}`);
-            const amount = parseInt(String(inputEl?.value || '').replace(/[^0-9]/g, ''), 10);
-            if (Number.isNaN(amount) || amount <= 0) {
-                showToast('Vui lòng nhập số tiền hợp lệ lớn hơn 0!', 'error');
+        window.adjustUserBalance = function (encodedUsername, mode) {
+            const targetName = decodeURIComponent(String(encodedUsername || '')).trim();
+            const users = getUsers();
+            const idx = users.findIndex(u => String(u.username || '').trim().toLowerCase() === targetName.toLowerCase());
+            if (idx === -1) {
+                showToast('Không tìm thấy tài khoản khách hàng!', 'error');
                 return;
             }
 
-            const users = getUsers();
-            const idx = users.findIndex(u => String(u.username || '').toLowerCase() === String(username).toLowerCase());
-            if (idx === -1) return;
+            const inputEl = document.querySelector(`[data-bal-input="${encodeURIComponent(users[idx].username)}"]`);
+            const rawVal = String(inputEl?.value || '').replace(/[^0-9]/g, '');
+            const amount = parseInt(rawVal, 10);
+            if (!Number.isFinite(amount) || amount <= 0) {
+                showToast('Vui lòng nhập số tiền hợp lệ lớn hơn 0!', 'error');
+                return;
+            }
 
             const currentBal = Math.max(0, Number(users[idx].balance) || 0);
             const nextBal = mode === 'add' ? currentBal + amount : Math.max(0, currentBal - amount);
             users[idx].balance = nextBal;
             saveUsers(users);
 
-            if (String(localStorage.getItem(STORAGE_KEYS.currentUser) || '').toLowerCase() === String(username).toLowerCase()) {
+            const currentSessionUser = String(localStorage.getItem(STORAGE_KEYS.currentUser) || '').trim().toLowerCase();
+            if (currentSessionUser && currentSessionUser === String(users[idx].username || '').trim().toLowerCase()) {
                 localStorage.setItem(STORAGE_KEYS.guestBalance, String(nextBal));
             }
 
             if (inputEl) inputEl.value = '';
-            broadcastAdminUpdate(`QTV_BALANCE_${mode.toUpperCase()}_${username}`, { username, amount, newBalance: nextBal });
-            showToast(`Đã ${mode === 'add' ? 'cộng' : 'trừ'} ${formatVND(amount)} cho ${username} (Số dư mới: ${formatVND(nextBal)})`, 'success');
+            broadcastAdminUpdate(`QTV_BALANCE_${mode.toUpperCase()}_${users[idx].username}`, {
+                username: users[idx].username,
+                amount,
+                newBalance: nextBal
+            });
+            showToast(`Đã ${mode === 'add' ? 'cộng' : 'trừ'} ${formatVND(amount)} cho ${users[idx].username} (Số dư mới: ${formatVND(nextBal)})`, 'success');
         };
 
         /* ================= RENDER GIAO DIỆN CÁC TAB ================= */
@@ -694,7 +704,9 @@
                 return;
             }
 
-            container.innerHTML = users.map(u => `
+            container.innerHTML = users.map(u => {
+                const encodedName = encodeURIComponent(String(u.username || ''));
+                return `
                 <article class="p-3.5 rounded-2xl bg-gaming-card border border-gaming-border space-y-2.5 text-xs">
                     <div class="flex items-center justify-between gap-2">
                         <div class="min-w-0">
@@ -708,20 +720,21 @@
                     </div>
 
                     <div class="flex items-center gap-1.5 pt-2 border-t border-gaming-border/70">
-                        <input type="number" id="balInput_${escapeHtml(u.username)}" min="1000" step="1000"
+                        <input type="number" data-bal-input="${encodedName}" min="1000" step="1000"
                             placeholder="Nhập số tiền..."
                             class="flex-1 bg-gaming-bg border border-gaming-border focus:border-[#00d2ff] rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none">
-                        <button type="button" onclick="adjustUserBalance('${escapeHtml(u.username)}', 'add')"
+                        <button type="button" onclick="adjustUserBalance('${encodedName}', 'add')"
                             class="px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] shrink-0">
                             + Cộng
                         </button>
-                        <button type="button" onclick="adjustUserBalance('${escapeHtml(u.username)}', 'sub')"
+                        <button type="button" onclick="adjustUserBalance('${encodedName}', 'sub')"
                             class="px-3 py-2 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold text-[11px] shrink-0">
                             - Trừ
                         </button>
                     </div>
                 </article>
-            `).join('');
+            `;
+            }).join('');
         };
 
         function renderSupabaseLogs() {
@@ -963,7 +976,6 @@
       let nextOrders = [...orderStore.list];
       let nextTopups = [...topupStore.list];
 
-      // Duyệt từ cũ đến mới để bản ghi cập nhật sau cùng đè đúng thứ tự thời gian
       for (const row of [...rows].reverse()) {
         const p = row && typeof row.payload === "object" && row.payload !== null ? row.payload : {};
         const orderObj = p.order || (row.event_type && String(row.event_type).includes("ORDER") ? p : null);
@@ -1009,7 +1021,6 @@
     }
   };
 
-  // Tự kéo khi mở trang và tự làm mới định kỳ mỗi 10 giây
   pullAndMergeCloud();
   setInterval(pullAndMergeCloud, 10000);
 })();
