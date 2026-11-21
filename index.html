@@ -892,5 +892,128 @@
             checkAdminAuthGate();
         });
     </script>
+    <script>
+(function () {
+  const SUPABASE_URL = "https://ceicnklarilkytojtssy.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_Y0U7X4uhNk2sMUiHm1tlVQ_JwAO2SOj";
+  const REST_URL = `${SUPABASE_URL}/rest/v1/store_sync?select=*&order=id.desc&limit=200`;
+  const INSERT_URL = `${SUPABASE_URL}/rest/v1/store_sync`;
+
+  const headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+  };
+
+  function readArray(keys) {
+    for (const k of keys) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) return { key: k, list: parsed };
+        }
+      } catch (_) {}
+    }
+    return { key: keys[0], list: [] };
+  }
+
+  function writeArray(key, list) {
+    try {
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch (_) {}
+  }
+
+  function upsertById(list, incoming) {
+    if (!incoming || !incoming.id) return list;
+    const idx = list.findIndex((item) => String(item.id) === String(incoming.id));
+    if (idx === -1) {
+      return [incoming, ...list];
+    }
+    const current = list[idx];
+    const nextTime = Date.parse(incoming.updatedAt || incoming.createdAt || 0) || 0;
+    const curTime = Date.parse(current.updatedAt || current.createdAt || 0) || 0;
+    if (nextTime >= curTime) {
+      const copy = [...list];
+      copy[idx] = { ...current, ...incoming };
+      return copy;
+    }
+    return list;
+  }
+
+  function refreshUi() {
+    ["renderOrders", "renderTopups", "renderAll", "renderDashboard"].forEach((fnName) => {
+      if (typeof window[fnName] === "function") {
+        try { window[fnName](); } catch (_) {}
+      }
+    });
+  }
+
+  async function pullAndMergeCloud() {
+    try {
+      const res = await fetch(REST_URL, { headers, cache: "no-store" });
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return;
+
+      const orderStore = readArray(["hoangnam_orders", "orders", "store_orders"]);
+      const topupStore = readArray(["hoangnam_topups", "topups", "store_topups"]);
+
+      let nextOrders = [...orderStore.list];
+      let nextTopups = [...topupStore.list];
+
+      // Duyệt từ cũ đến mới để bản ghi cập nhật sau cùng đè đúng thứ tự thời gian
+      for (const row of [...rows].reverse()) {
+        const p = row && typeof row.payload === "object" && row.payload !== null ? row.payload : {};
+        const orderObj = p.order || (row.event_type && String(row.event_type).includes("ORDER") ? p : null);
+        const topupObj = p.topup || (row.event_type && String(row.event_type).includes("TOPUP") ? p : null);
+
+        if (orderObj && orderObj.id) {
+          nextOrders = upsertById(nextOrders, { ...orderObj, ip_address: orderObj.ip_address || row.ip_address });
+        }
+        if (topupObj && topupObj.id) {
+          nextTopups = upsertById(nextTopups, { ...topupObj, ip_address: topupObj.ip_address || row.ip_address });
+        }
+      }
+
+      writeArray(orderStore.key, nextOrders);
+      writeArray(topupStore.key, nextTopups);
+      refreshUi();
+    } catch (_) {}
+  }
+
+  async function pushAdminUpdate(eventType, itemObj) {
+    if (!itemObj) return;
+    try {
+      await fetch(INSERT_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify([{
+          event_type: eventType,
+          payload: eventType.includes("ORDER") ? { order: itemObj } : { topup: itemObj },
+          ip_address: "admin-panel",
+          updated_at: new Date().toISOString()
+        }])
+      });
+    } catch (_) {}
+  }
+
+  window.HoangNamAdminSync = {
+    syncNow: pullAndMergeCloud,
+    pushOrderUpdate(orderObj) {
+      return pushAdminUpdate("ORDER_UPDATED", { ...orderObj, updatedAt: new Date().toISOString() });
+    },
+    pushTopupUpdate(topupObj) {
+      return pushAdminUpdate("TOPUP_UPDATED", { ...topupObj, updatedAt: new Date().toISOString() });
+    }
+  };
+
+  // Tự kéo khi mở trang và tự làm mới định kỳ mỗi 10 giây
+  pullAndMergeCloud();
+  setInterval(pullAndMergeCloud, 10000);
+})();
+</script>
+
 </body>
 </html>
