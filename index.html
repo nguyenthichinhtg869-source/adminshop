@@ -1014,6 +1014,114 @@
   setInterval(pullAndMergeCloud, 10000);
 })();
 </script>
+<script>
+(function () {
+  if (window.__HN_ADMIN_SYNC_FULL__) return;
+  window.__HN_ADMIN_SYNC_FULL__ = true;
+
+  const SUPABASE_URL = "https://ceicnklarilkytojtssy.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_Y0U7X4uhNk2sMUiHm1tlVQ_JwAO2SOj";
+  const FETCH_URL = `${SUPABASE_URL}/rest/v1/store_sync?select=*&order=id.desc&limit=300`;
+
+  const headers = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": `Bearer ${SUPABASE_KEY}`,
+    "Content-Type": "application/json"
+  };
+
+  function findTargetKey(hints, fallback) {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      const lk = k.toLowerCase();
+      if (hints.some((h) => lk.includes(h))) {
+        try {
+          const parsed = JSON.parse(localStorage.getItem(k));
+          if (Array.isArray(parsed)) return k;
+        } catch (_) {}
+      }
+    }
+    return fallback;
+  }
+
+  function readList(key) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function mergeById(list, incoming) {
+    if (!incoming || !incoming.id) return list;
+    const idx = list.findIndex((x) => x && String(x.id) === String(incoming.id));
+    if (idx === -1) return [incoming, ...list];
+    const copy = [...list];
+    copy[idx] = { ...copy[idx], ...incoming };
+    return copy;
+  }
+
+  function triggerRender() {
+    for (const key of Object.keys(window)) {
+      if (/^render/i.test(key) && typeof window[key] === "function") {
+        try { window[key](); } catch (_) {}
+      }
+    }
+  }
+
+  async function syncFromSupabase() {
+    try {
+      const res = await fetch(FETCH_URL, { headers, cache: "no-store" });
+      if (!res.ok) return;
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return;
+
+      const orderKey = findTargetKey(["order", "don"], "orders");
+      const topupKey = findTargetKey(["topup", "nap", "deposit"], "topups");
+      const userKey = findTargetKey(["user", "account", "tai_khoan", "taikhoan"], "users");
+
+      let orders = readList(orderKey);
+      let topups = readList(topupKey);
+      let users = readList(userKey);
+      let changed = false;
+
+      for (const row of [...rows].reverse()) {
+        const p = row && typeof row.payload === "object" && row.payload !== null ? row.payload : {};
+        const ord = p.order || (row.event_type && String(row.event_type).includes("ORDER") ? p : null);
+        const top = p.topup || (row.event_type && String(row.event_type).includes("TOPUP") ? p : null);
+        const usr = p.user || (row.event_type && String(row.event_type).includes("USER") ? p : null);
+
+        if (ord && ord.id) {
+          const before = JSON.stringify(orders);
+          orders = mergeById(orders, { ...ord, ip_address: ord.ip_address || row.ip_address });
+          if (JSON.stringify(orders) !== before) changed = true;
+        }
+        if (top && top.id) {
+          const before = JSON.stringify(topups);
+          topups = mergeById(topups, { ...top, ip_address: top.ip_address || row.ip_address });
+          if (JSON.stringify(topups) !== before) changed = true;
+        }
+        if (usr && usr.id) {
+          const before = JSON.stringify(users);
+          users = mergeById(users, { ...usr, ip_address: usr.ip_address || row.ip_address });
+          if (JSON.stringify(users) !== before) changed = true;
+        }
+      }
+
+      if (changed) {
+        localStorage.setItem(orderKey, JSON.stringify(orders));
+        localStorage.setItem(topupKey, JSON.stringify(topups));
+        localStorage.setItem(userKey, JSON.stringify(users));
+        triggerRender();
+      }
+    } catch (_) {}
+  }
+
+  syncFromSupabase();
+  setInterval(syncFromSupabase, 5000);
+})();
+</script>
 
 </body>
 </html>
